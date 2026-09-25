@@ -1,0 +1,577 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <ctype.h>
+#define MAX_SENT_LEN        500
+#define MAX_HISTORY         15
+#define LEVELS_PER_DIFF     20
+#define PROGRESS_FILE       "byte_progress.txt"
+#define HIGHSCORE_FILE      "byte_highscores.txt"
+#define BEST_FILE           "byte_best_levels.txt"
+#define RESET   "\033[0m"
+#define GREEN   "\033[32m"
+#define RED     "\033[31m"
+#define CYAN    "\033[36m"
+#define YELLOW  "\033[33m"
+#define BLUE    "\033[34m"
+#define MAGENTA "\033[35m"
+#define BOLD    "\033[1m"
+typedef enum {
+    BYTE_HAPPY, BYTE_SAD, BYTE_EXCITED, BYTE_SURPRISED, BYTE_THINKING,
+    BYTE_WINKING, BYTE_DETERMINED, BYTE_FOCUSED, BYTE_CHEERING,
+    BYTE_THUMBS_UP, BYTE_LOVE
+} ByteExpression;
+static void byte_say(ByteExpression expr, const char *msg) {
+    const char *face;
+    switch (expr) {
+        case BYTE_HAPPY:      face = "(^_^)"; break;
+        case BYTE_SAD:        face = "(T_T)"; break;
+        case BYTE_EXCITED:    face = "(^O^)"; break;
+        case BYTE_SURPRISED:  face = "(O_O)"; break;
+        case BYTE_THINKING:   face = "(._.)?"; break;
+        case BYTE_WINKING:    face = "(^_~)"; break;
+        case BYTE_DETERMINED: face = "(>_<)"; break;
+        case BYTE_FOCUSED:    face = "(o_o)"; break;
+        case BYTE_CHEERING:   face = "\\(^o^)/"; break;
+        case BYTE_THUMBS_UP:  face = "(d_b)"; break;
+        case BYTE_LOVE:       face = "(*_*)"; break;
+        default:              face = "(^_^)"; break;
+    }
+    printf("\n  %s  %sByte:%s %s\"%s\"%s\n", face, CYAN BOLD, RESET, YELLOW, msg, RESET);
+}
+typedef enum { EASY = 0, HARD = 1, HELL = 2 } Difficulty;
+static const char *easy_levels[LEVELS_PER_DIFF] = {
+    "The cat sat on the mat.",
+    "I love to type every day.",
+    "Keep calm and code on.",
+    "Practice makes perfect.",
+    "Hello from Byte the mascot.",
+    "Typing is a useful skill.",
+    "Stay positive and keep going.",
+    "Small steps lead to big results.",
+    "Focus on accuracy first.",
+    "You can do this easily.",
+    "Learning never stops.",
+    "Code is fun and powerful.",
+    "Type with both hands.",
+    "Never give up on your goals.",
+    "Simple words build strong habits.",
+    "Every day is a new chance.",
+    "Believe in your progress.",
+    "Speed comes with practice.",
+    "Enjoy the process of learning.",
+    "You are getting better already."
+};
+static const char *hard_levels[LEVELS_PER_DIFF] = {
+    "The quick brown fox jumps over the lazy dog.",
+    "Programming is the art of telling a computer what to do.",
+    "Consistency is the key to improving typing speed over time.",
+    "Never stop learning new things in the world of technology.",
+    "Hard work and dedication always lead to great results.",
+    "Stay focused and keep improving your typing performance daily.",
+    "Success is built on small efforts repeated day after day.",
+    "Typing accurately is more important than typing very fast.",
+    "A journey of a thousand miles begins with a single step.",
+    "Coding every day helps build strong problem solving skills.",
+    "The only way to do great work is to love what you do.",
+    "In technology, continuous learning is the real superpower.",
+    "Practice does not make perfect, perfect practice makes perfect.",
+    "Your future self will thank you for the effort you put in today.",
+    "Discipline is choosing between what you want now and what you want most.",
+    "Every expert was once a beginner who refused to give up.",
+    "Focus on progress rather than perfection in your typing journey.",
+    "The best time to start improving was yesterday, the next best is now.",
+    "Skills are developed through deliberate and consistent practice.",
+    "Push yourself because no one else is going to do it for you."
+};
+static const char *hell_levels[LEVELS_PER_DIFF] = {
+    "The complexity of modern software systems requires careful architectural decisions and continuous refactoring.",
+    "Asynchronous programming paradigms enable efficient handling of concurrent operations without blocking the main thread.",
+    "Understanding memory management and pointer arithmetic is fundamental for writing high performance C applications.",
+    "Distributed systems introduce challenges such as network partitions, consistency models, and fault tolerance strategies.",
+    "Optimizing algorithms for both time and space complexity often involves trade offs that must be carefully evaluated.",
+    "The rapid evolution of programming languages demands that developers continuously adapt and expand their skill sets.",
+    "Writing clean, maintainable, and well documented code is more valuable than clever one liners that obscure intent.",
+    "In competitive programming, the ability to quickly recognize patterns and apply appropriate algorithms is crucial.",
+    "Debugging complex race conditions in multithreaded applications requires systematic approaches and specialized tools.",
+    "The intersection of artificial intelligence and traditional software engineering is creating entirely new paradigms.",
+    "Performance bottlenecks are frequently found not in the algorithms themselves but in data access patterns and caching.",
+    "Mastering the intricacies of compiler optimizations can unlock significant performance gains in critical code paths.",
+    "Building scalable systems necessitates thoughtful design around data partitioning, replication, and load balancing.",
+    "The psychological aspect of typing under pressure often determines success more than pure mechanical skill alone.",
+    "Continuous integration and automated testing pipelines are essential for maintaining quality in large codebases.",
+    "Understanding the underlying hardware architecture enables developers to write more cache friendly and efficient code.",
+    "In the realm of systems programming, even small inefficiencies can compound into significant performance problems.",
+    "The ability to reason about concurrent execution and shared mutable state separates intermediate from advanced programmers.",
+    "Cryptographic protocols rely on precise mathematical foundations and careful implementation to ensure security properties.",
+    "True mastery in typing and programming comes from deliberate practice, deep focus, and relentless curiosity about systems."
+};
+static int unlocked[3] = {1, 1, 1};
+static int best_wpm[3][LEVELS_PER_DIFF] = {0};
+static int personal_best = 0;
+static double total_practice_seconds = 0.0;
+static int total_chars_typed = 0;
+static int total_correct_chars = 0;
+static int session_races = 0;
+static int history_wpm[MAX_HISTORY];
+static int history_count = 0;
+static int speeds[50];
+static int num_results = 0;
+static void load_data(void) {
+    unlocked[0] = 1;
+    unlocked[1] = 1;
+    unlocked[2] = 1;
+    personal_best = 0;
+
+    for (int d = 0; d < 3; d++)
+        for (int i = 0; i < LEVELS_PER_DIFF; i++)
+            best_wpm[d][i] = 0;
+}
+static void save_data(void) {
+    FILE *f = fopen(HIGHSCORE_FILE, "w");
+    if (f) {
+        fprintf(f, "%d\n", personal_best);
+        fclose(f);
+    }
+    f = fopen(PROGRESS_FILE, "w");
+    if (f) {
+        fprintf(f, "%d %d %d\n", unlocked[0], unlocked[1], unlocked[2]);
+        fclose(f);
+    }
+    f = fopen(BEST_FILE, "w");
+    if (f) {
+        for (int d = 0; d < 3; d++) {
+            for (int i = 0; i < LEVELS_PER_DIFF; i++)
+                fprintf(f, "%d ", best_wpm[d][i]);
+            fprintf(f, "\n");
+        }
+        fclose(f);
+    }
+}
+static int compute_lis(const int *arr, int n, int *lis_seq, int *lis_len) {
+    if (n <= 0) return -1;
+    if (n == 1) {
+        lis_seq[0] = arr[0];
+        *lis_len = 1;
+        return 0;
+    }
+    int *tails = (int*)malloc(n * sizeof(int));
+    int *prev  = (int*)malloc(n * sizeof(int));
+    int *idx   = (int*)malloc(n * sizeof(int));
+    if (!tails || !prev || !idx) {
+        free(tails); free(prev); free(idx);
+        return -1;
+    }
+    int len = 0;
+    for (int i = 0; i < n; i++) {
+        prev[i] = -1;
+        int lo = 0, hi = len;
+        while (lo < hi) {
+            int mid = lo + (hi - lo) / 2;
+            if (tails[mid] < arr[i]) lo = mid + 1;
+            else hi = mid;
+        }
+        if (lo > 0) prev[i] = idx[lo - 1];
+        tails[lo] = arr[i];
+        idx[lo] = i;
+        if (lo == len) len++;
+    }
+    *lis_len = len;
+    int p = idx[len - 1];
+    for (int i = len - 1; i >= 0; i--) {
+        lis_seq[i] = arr[p];
+        p = prev[p];
+    }
+    free(tails); free(prev); free(idx);
+    return 0;
+}
+static void longest_contiguous(const int *arr, int n, int *start, int *length) {
+    if (n <= 0) {
+        *start = 0;
+        *length = 0;
+        return;
+    }
+    int best_s = 0, best_l = 1;
+    int cur_s = 0, cur_l = 1;
+    for (int i = 1; i < n; i++) {
+        if (arr[i] > arr[i-1]) {
+            cur_l++;
+            if (cur_l > best_l) {
+                best_l = cur_l;
+                best_s = cur_s;
+            }
+        } else {
+            cur_s = i;
+            cur_l = 1;
+        }
+    }
+    *start = best_s;
+    *length = best_l;
+}
+static int count_words(const char *s) {
+    int count = 0, in_word = 0;
+    for (int i = 0; s[i]; i++) {
+        if (!isspace((unsigned char)s[i])) {
+            if (!in_word) { count++; in_word = 1; }
+        } else in_word = 0;
+    }
+    return count;
+}
+static void add_to_history(int wpm) {
+    if (history_count < MAX_HISTORY)
+        history_wpm[history_count++] = wpm;
+    else {
+        for (int i = 0; i < MAX_HISTORY - 1; i++)
+            history_wpm[i] = history_wpm[i + 1];
+        history_wpm[MAX_HISTORY - 1] = wpm;
+    }
+}
+static void better_countdown(void) {
+    printf("\n");
+    const char *msgs[] = {"Get Ready...", "3", "2", "1", "GO!"};
+    for (int i = 0; i < 5; i++) {
+        if (i == 4) printf("  %s%s%s\n", GREEN BOLD, msgs[i], RESET);
+        else printf("  %s\n", msgs[i]);
+        fflush(stdout);
+        clock_t start = clock();
+        while ((clock() - start) < CLOCKS_PER_SEC * 0.7);
+    }
+    printf("\n");
+}
+static int calc_stars(int wpm, double accuracy) {
+    if (wpm >= 75 && accuracy >= 95) return 3;
+    if (wpm >= 50 && accuracy >= 85) return 2;
+    if (wpm >= 30 && accuracy >= 70) return 1;
+    return 0;
+}
+static void print_stars(int stars) {
+    printf("Stars: ");
+    if (stars >= 1) printf("*"); else printf("-");
+    if (stars >= 2) printf("*"); else printf("-");
+    if (stars >= 3) printf("*"); else printf("-");
+    printf("  (%d/3)\n", stars);
+}
+static void print_title(void) {
+    printf("\n");
+    printf(RED "Ty" RESET);
+    printf(GREEN "pe" RESET);
+    printf(YELLOW "Qu" RESET);
+    printf(BLUE "es" RESET);
+    printf(MAGENTA "t" RESET);
+    printf("\n");
+}
+static void show_level_select(Difficulty diff) {
+    const char *names[] = {"EASY PEASY", "HARD TRAIL", "HELL MODE"};
+    printf("\n%s%s - Level Select%s\n\n", BOLD, names[diff], RESET);
+    for (int i = 0; i < LEVELS_PER_DIFF; i++) {
+        printf("[%02d] ", i + 1);
+        if (i < unlocked[diff]) {
+            int stars = 0;
+            if (best_wpm[diff][i] >= 75) stars = 3;
+            else if (best_wpm[diff][i] >= 50) stars = 2;
+            else if (best_wpm[diff][i] >= 30) stars = 1;
+            if (stars >= 1) printf("*"); else printf("-");
+            if (stars >= 2) printf("*"); else printf("-");
+            if (stars >= 3) printf("*"); else printf("-");
+            if (best_wpm[diff][i] > 0)
+                printf("  Best: %d WPM", best_wpm[diff][i]);
+        } else {
+            printf("Locked");
+        }
+        printf("\n");
+    }
+}
+static int play_sentence(const char *sentence, Difficulty diff, int level, int is_custom) {
+    int word_count = count_words(sentence);
+    int target_len = (int)strlen(sentence);
+    if (!is_custom) {
+        const char *names[] = {"EASY PEASY", "HARD TRAIL", "HELL MODE"};
+        printf("\n%sDifficulty:%s %s\n", CYAN, RESET, names[diff]);
+        printf("%sLevel:%s      %d / 20\n", CYAN, RESET, level + 1);
+    } else {
+        printf("\n%sCustom Sentence Mode%s\n", CYAN, RESET);
+    }
+    byte_say(BYTE_FOCUSED, "Focus... here comes your challenge!");
+    printf("\nType this:\n\n%s%s%s\n\n", BOLD, sentence, RESET);
+    printf("Press Enter when ready...");
+    getchar();
+    better_countdown();
+    clock_t start = clock();
+    char typed[MAX_SENT_LEN];
+    if (fgets(typed, MAX_SENT_LEN, stdin) == NULL) return 0;
+    typed[strcspn(typed, "\n")] = '\0';
+    clock_t end = clock();
+    double seconds = (double)(end - start) / CLOCKS_PER_SEC;
+    if (seconds < 0.3) seconds = 0.3;
+    total_practice_seconds += seconds;
+    session_races++;
+    int correct = 0;
+    int tlen = (int)strlen(typed);
+    int compare_len = (target_len > tlen) ? target_len : tlen;
+    printf("\n%sOriginal:%s %s\n", CYAN, RESET, sentence);
+    printf("%sYou typed:%s ", CYAN, RESET);
+    for (int i = 0; i < tlen; i++) {
+        if (i < target_len && typed[i] == sentence[i]) {
+            putchar(typed[i]);
+            correct++;
+        } else {
+            printf("%s%c%s", RED, typed[i], RESET);
+        }
+    }
+    printf("\n");
+    total_chars_typed += compare_len;
+    total_correct_chars += correct;
+    double accuracy = (compare_len > 0) ? (100.0 * correct / compare_len) : 0.0;
+    if (accuracy > 100.0) accuracy = 100.0;
+    double minutes = seconds / 60.0;
+    int raw_wpm = (int)(word_count / minutes + 0.5);
+    int bonus = 0;
+    if (accuracy >= 98.0) bonus = 8;
+    else if (accuracy >= 95.0) bonus = 5;
+    else if (accuracy >= 90.0) bonus = 3;
+    int final_wpm = raw_wpm + bonus;
+    if (accuracy < 95.0)
+        final_wpm = (int)(raw_wpm * (accuracy / 100.0) + 0.5);
+    if (final_wpm < 0) final_wpm = 0;
+    int stars = calc_stars(final_wpm, accuracy);
+    if (num_results < 50) speeds[num_results++] = final_wpm;
+    add_to_history(final_wpm);
+    if (final_wpm > personal_best) {
+        personal_best = final_wpm;
+        byte_say(BYTE_EXCITED, "NEW PERSONAL BEST!!!");
+    }
+    if (!is_custom) {
+        if (final_wpm > best_wpm[diff][level]) {
+            best_wpm[diff][level] = final_wpm;
+            printf("%sNew best for this level!%s\n", GREEN, RESET);
+        }
+        if (stars >= 1) {
+            int new_unlocked = level + 3;
+            if (new_unlocked > 20) new_unlocked = 20;
+            if (new_unlocked > unlocked[diff]) {
+                unlocked[diff] = new_unlocked;
+                printf("%sUnlocked up to Level %d!%s\n", GREEN, unlocked[diff], RESET);
+                byte_say(BYTE_CHEERING, "New levels unlocked!");
+            }
+        }
+    }
+    save_data();
+    printf("\nTime taken     : %.2f seconds\n", seconds);
+    printf("Accuracy       : %.1f%%\n", accuracy);
+    if (bonus > 0) printf("Accuracy Bonus : +%d WPM\n", bonus);
+    printf("Typing Speed   : %d WPM\n", final_wpm);
+    printf("Personal Best  : %d WPM\n", personal_best);
+    print_stars(stars);
+
+    if (stars == 3) byte_say(BYTE_EXCITED, "Perfect run!");
+    else if (stars == 2) byte_say(BYTE_CHEERING, "Great job!");
+    else if (stars == 1) byte_say(BYTE_THUMBS_UP, "You passed!");
+    else byte_say(BYTE_SAD, "Try again, you can do better!");
+
+    return final_wpm;
+}
+static void play_daily_challenge(void) {
+    time_t t = time(NULL);
+    struct tm *tm = localtime(&t);
+    int day_seed = tm->tm_yday + tm->tm_year * 365;
+    srand(day_seed);
+    int diff = rand() % 3;
+    int level = rand() % LEVELS_PER_DIFF;
+    const char **levels = (diff == 0) ? easy_levels :
+                          (diff == 1) ? hard_levels : hell_levels;
+    printf("\n%s=== DAILY CHALLENGE ===%s\n", YELLOW BOLD, RESET);
+    byte_say(BYTE_EXCITED, "Today's special challenge is ready!");
+    play_sentence(levels[level], (Difficulty)diff, level, 0);
+    srand((unsigned)time(NULL));
+}
+int main(void) {
+    srand((unsigned)time(NULL));
+    load_data();
+    int choice;
+    char buf[32];
+    print_title();
+    byte_say(BYTE_HAPPY, "Hi! I'm Byte! Welcome to TypeQuest!");
+    while (1) {
+        printf("\n%sMENU%s\n", BOLD, RESET);
+        printf("1. Play Level\n");
+        printf("2. Random Level\n");
+        printf("3. Daily Challenge\n");
+        printf("4. Custom Sentence\n");
+        printf("5. Show Progress\n");
+        printf("6. Full Analysis\n");
+        printf("7. Practice History\n");
+        printf("8. Detailed Stats\n");
+        printf("9. Exit\n");
+        printf("Choice: ");
+        if (!fgets(buf, sizeof(buf), stdin)) continue;
+        choice = atoi(buf);
+        switch (choice) {
+        case 1: {
+            printf("\nSelect Difficulty:\n");
+            printf("1. Easy Peasy  (Unlocked: %d/20)\n", unlocked[0]);
+            printf("2. Hard Trail  (Unlocked: %d/20)\n", unlocked[1]);
+            printf("3. Hell Mode   (Unlocked: %d/20)\n", unlocked[2]);
+            printf("Choice: ");
+            if (!fgets(buf, sizeof(buf), stdin)) break;
+            int d = atoi(buf);
+            if (d < 1 || d > 3) {
+                byte_say(BYTE_SURPRISED, "Invalid difficulty!");
+                break;
+            }
+            Difficulty diff = (Difficulty)(d - 1);
+            show_level_select(diff);
+            printf("\nSelect Level (1-%d): ", unlocked[diff]);
+            if (!fgets(buf, sizeof(buf), stdin)) break;
+            int level = atoi(buf);
+            if (level < 1 || level > unlocked[diff]) {
+                byte_say(BYTE_SAD, "That level is locked!");
+                break;
+            }
+            level--;
+
+            int again = 1;
+            while (again) {
+                const char *sent = (diff == EASY) ? easy_levels[level] :
+                                   (diff == HARD) ? hard_levels[level] : hell_levels[level];
+                play_sentence(sent, diff, level, 0);
+
+                printf("\nRetry this level? (1 = Yes, 0 = No): ");
+                if (!fgets(buf, sizeof(buf), stdin)) break;
+                again = atoi(buf);
+            }
+            break;
+        }
+        case 2: {
+            printf("\nSelect Difficulty:\n");
+            printf("1. Easy Peasy\n2. Hard Trail\n3. Hell Mode\nChoice: ");
+            if (!fgets(buf, sizeof(buf), stdin)) break;
+            int d = atoi(buf);
+            if (d < 1 || d > 3) break;
+            Difficulty diff = (Difficulty)(d - 1);
+
+            int max_lvl = unlocked[diff];
+            if (max_lvl < 1) max_lvl = 1;
+            int level = rand() % max_lvl;
+
+            const char *sent = (diff == EASY) ? easy_levels[level] :
+                               (diff == HARD) ? hard_levels[level] : hell_levels[level];
+            play_sentence(sent, diff, level, 0);
+            break;
+        }
+        case 3:
+            play_daily_challenge();
+            break;
+        case 4: {
+            printf("\nEnter your own sentence:\n> ");
+            char custom[MAX_SENT_LEN];
+            if (!fgets(custom, MAX_SENT_LEN, stdin)) break;
+            custom[strcspn(custom, "\n")] = '\0';
+            if (strlen(custom) < 5) {
+                byte_say(BYTE_SURPRISED, "Sentence is too short!");
+                break;
+            }
+            play_sentence(custom, EASY, 0, 1);
+            break;
+        }
+        case 5: {
+            printf("\n%sPROGRESS%s\n", BOLD, RESET);
+            printf("Easy Peasy : %d / 20 unlocked\n", unlocked[0]);
+            printf("Hard Trail : %d / 20 unlocked\n", unlocked[1]);
+            printf("Hell Mode  : %d / 20 unlocked\n", unlocked[2]);
+            break;
+        }
+        case 6: {
+            if (num_results == 0) {
+                byte_say(BYTE_SAD, "Play at least one level first!");
+                break;
+            }
+            int sum = 0, maxv = speeds[0], minv = speeds[0];
+            for (int i = 0; i < num_results; i++) {
+                sum += speeds[i];
+                if (speeds[i] > maxv) maxv = speeds[i];
+                if (speeds[i] < minv) minv = speeds[i];
+            }
+            // LIS
+            int lis_seq[50];
+            int lis_len = 0;
+            compute_lis(speeds, num_results, lis_seq, &lis_len);
+            // Continuous streak
+            int cstart, clen;
+            longest_contiguous(speeds, num_results, &cstart, &clen);
+            printf("\n%sFULL ANALYSIS%s\n", BOLD, RESET);
+            printf("Total races               : %d\n", num_results);
+            printf("Average WPM               : %.1f\n", (double)sum / num_results);
+            printf("Best run                  : %d WPM\n", maxv);
+            printf("Worst run                 : %d WPM\n", minv);
+            printf("Personal Best             : %d WPM\n", personal_best);
+            printf("LIS length                : %d\n", lis_len);
+            printf("LIS path                  : ");
+            for (int i = 0; i < lis_len; i++) {
+                printf("%d", lis_seq[i]);
+                if (i < lis_len - 1) printf(" -> ");
+            }
+            printf(" WPM\n");
+            printf("Longest continuous streak : %d races\n", clen);
+            printf("Streak from race %d to %d\n", cstart + 1, cstart + clen);
+            printf("\n%sPerformance Trend:%s\n\n", BOLD, RESET);
+            int max_bar = 40;
+            for (int i = 0; i < num_results; i++) {
+                int bar_len = 0;
+                if (maxv > 0)
+                    bar_len = (speeds[i] * max_bar) / maxv;
+                printf("Race %2d | %3d WPM | ", i + 1, speeds[i]);
+                for (int j = 0; j < bar_len; j++) {
+                    if (i >= cstart && i < cstart + clen)
+                        printf("%s#%s", GREEN, RESET);   // highlight streak
+                    else
+                        printf("#");
+                }
+                printf("\n");
+            }
+            printf("\n%s(Green # = Continuous Improvement Streak)%s\n", GREEN, RESET);
+
+            break;
+        }
+        case 7: {
+            if (history_count == 0) {
+                printf("No history yet.\n");
+                break;
+            }
+            printf("\n%sRecent Races%s\n", BOLD, RESET);
+            for (int i = 0; i < history_count; i++)
+                printf("  %2d. %d WPM\n", i + 1, history_wpm[i]);
+            break;
+        }
+        case 8: {
+            int minutes = (int)(total_practice_seconds / 60);
+            int secs = (int)total_practice_seconds % 60;
+            double avg_acc = (total_chars_typed > 0) ?
+                100.0 * total_correct_chars / total_chars_typed : 0;
+            printf("\n%sDETAILED STATS%s\n", BOLD, RESET);
+            printf("Personal Best     : %d WPM\n", personal_best);
+            printf("Total practice    : %d min %d sec\n", minutes, secs);
+            printf("Races this session: %d\n", session_races);
+            printf("Total characters  : %d\n", total_chars_typed);
+            printf("Average accuracy  : %.1f%%\n", avg_acc);
+            break;
+        }
+        case 9: {
+            save_data();
+            printf("\n%s=== SESSION SUMMARY ===%s\n", YELLOW, RESET);
+            printf("Races played     : %d\n", session_races);
+            printf("Time practiced   : %.1f minutes\n", total_practice_seconds / 60.0);
+            printf("Personal Best    : %d WPM\n", personal_best);
+            byte_say(BYTE_LOVE, "Great practice today! See you next time!");
+            printf("\nGoodbye from Byte!\n");
+            return 0;
+        }
+
+        default:
+            byte_say(BYTE_SURPRISED, "That option doesn't exist!");
+            break;
+        }
+    }
+
+    return 0;
+}
